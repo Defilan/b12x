@@ -29,8 +29,11 @@ Measured configuration, identical for both arms except one environment variable:
 - Correctness state: a temperature-0 request ("Write a Python one-liner that reverses a string.")
   returns a correct `[::-1]` answer under both arms (`*-sanity.json`). The wording differs between
   arms: the all-reduce summation order differs, so bf16 rounding and the greedy token path diverge.
-  Collective correctness against NCCL is covered by `tests/comm/test_roce_oneshot_gpu.py` (72 passed
-  on this ring; the two failures are pre-existing `prepare()` calls) and by the standalone receipt.
+  The published `run-ab.sh` stops an arm before timing if deployment fails, the startup log does not
+  show the arm's `tp:0` backend, or the sanity request fails or lacks `[::-1]`. Those gates were added
+  after the recorded run; its outputs satisfy them (`*-startup.txt`, `*-sanity.json`), checked after
+  the run. Collective correctness against NCCL is the standalone receipt's gate, which passed before
+  and after timing at every size.
 - Client: `decode_ab.py` (in this directory) against the service on rank 0, sequenced by `run-ab.sh`:
   per concurrency (1, 2), one warmup round and five measured rounds of identical greedy streaming
   requests, `ignore_eos`, 512 tokens each. Decode rate per request = (completion_tokens - 1) /
@@ -52,11 +55,11 @@ Measured configuration, identical for both arms except one environment variable:
 | c=2 (10 requests) | 27.36 | 27.58 | -0.8% | 26.75-27.86 | 27.33-27.84 | 0.363 / 0.336 s |
 
 Reading: decode is at parity on this configuration; the differences are inside the ROCE arm's
-spread. The standalone receipt (`../20261001-3spark-ring-bf16-standalone.json`) shows the `tp:0`
-collective itself 2.6-5.2x faster in graph replay, so at concurrency 1 and 2 the all-reduce share of
-the DeepSeek-V4.1 step is too small to move decode, consistent with the earlier four-Spark A/B, where
-gains grew with concurrency. This configuration is capped at two sequences, and the MoE's `ep:0`
-group stays on NCCL.
+spread. The standalone receipt (`../20261001-3spark-ring-bf16-standalone.json`) is a proxy: it times
+isolated collectives (2.6-5.2x faster in graph replay) and does not measure the `tp:0` collective
+inside a serving step. Why that speedup does not show up in decode here is not measured. Two
+untested candidates: at one or two sequences the all-reduce may be a small share of the step, and
+the MoE's `ep:0` group stays on NCCL in both arms. This configuration is capped at two sequences.
 
 An earlier single-deployment run of the same code (image built from the PR's first commit,
 `earlier-run-*-c1.jsonl`, 17:44 to 17:52 UTC) measured ROCE 36.24 (35.74-36.30) vs NCCL 34.04

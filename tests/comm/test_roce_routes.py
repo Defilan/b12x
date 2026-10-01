@@ -139,6 +139,25 @@ def test_fallback_prefers_verified_links_over_unverifiable_pairs():
             assert (0, 0) not in links
 
 
+def test_fallback_finds_a_complete_matching_a_greedy_pick_would_miss():
+    """A verified link that blocks the only unverifiable pair is skipped for one that leaves room for it."""
+    local = [ep("roce0", "10.0.0.1/24"), ep("ib1")]
+    remote = [ep("roce0", "10.0.9.2/24"), ep("roce1", "10.0.0.2/24"), ep("roce2", "10.0.0.3/24")]
+    # Taking (0, 1) first would leave (1, 1) unusable; (0, 2) plus the trusted (1, 1) supplies both rails.
+    assert plan_routes([local, remote], 0, 2)[1] == [(0, 2), (1, 1)]
+    assert plan_routes([local, remote], 1, 2)[0] == [(2, 0), (1, 1)]
+
+
+def test_fallback_tie_break_is_symmetric_on_a_shared_subnet():
+    """Two equally verified matchings on one flat subnet: both ends still choose the same links."""
+    a = [ep("d0", "10.1.0.1/24"), ep("d1", "10.1.0.2/24"), ep("x", "10.9.0.1/24")]
+    b = [ep("d0", "10.1.0.5/24"), ep("d1", "10.1.0.6/24"), ep("y", "10.8.0.1/24")]
+    # Index pairing fails on device 2, so both ranks fall back to subnet matching.
+    forward = plan_routes([a, b], 0, 2)[1]
+    backward = plan_routes([a, b], 1, 2)[0]
+    assert backward == [(r, l) for l, r in forward]
+
+
 def test_rails_out_of_range_rejected():
     """Rail counts outside 1..MAX_RAILS are rejected."""
     with pytest.raises(ValueError):

@@ -185,7 +185,8 @@ spec:
   - {name: VLLM_ROCE_ALLGATHER_MAX_SIZE, value: 16MB}
   - {name: B12X_ROCE_CACHE_DIR, value: /cache/b12x/roce}
   - {name: B12X_ROCE_TRAFFIC_CLASS, value: "106"}
-  # NCCL over this ring, as proven by the EXL3 deployment (restore/isvc.json)
+  # NCCL on this ring: RoCE v2 over IPv4 (GID index 3), all four port functions listed, and NCCL 2.30's subnet-aware
+  # routing, which picks the device on each peer's point-to-point subnet (without it every channel's QP times out).
   - {name: NCCL_NET, value: IB}
   - {name: NCCL_IB_DISABLE, value: "0"}
   - {name: NCCL_IB_ROCE_VERSION_NUM, value: "2"}

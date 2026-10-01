@@ -9,16 +9,18 @@ device and a remote device on the same subnet.
 ``plan_routes`` uses index pairing (rail ``h`` on device ``h`` at both ends) whenever every pair of
 ranks shares a subnet on each such pair, which every switched fabric does, and otherwise pairs devices
 per peer by subnet. A device without an IPv4 GID cannot be checked, so both modes trust the caller's
-device order for it: index pairing skips the check, and per-peer pairing accepts a same-index pair
-with such a device only after every verified same-subnet link. Every rank runs the planner over the
-same exchanged endpoint list, and rails are ordered by link network address, so both ends of a link
-always agree on which rail it carries.
+device order for it: index pairing skips the check, and per-peer pairing uses a same-index pair with
+such a device only when no choice of verified same-subnet links fills every rail. Per-peer pairing
+picks the device-disjoint set of links with the most verified ones. Every rank runs the planner over
+the same exchanged endpoint list, and rails are ordered by link network address, so both ends of a
+link always agree on which rail it carries.
 """
 
 from __future__ import annotations
 
 import fcntl
 import ipaddress
+import itertools
 import socket
 import struct
 from dataclasses import dataclass
@@ -92,6 +94,23 @@ def _index_pairing_valid(endpoints: Sequence[Sequence[Endpoint]], rails: int) ->
     return True
 
 
+def _best_matching(candidates: list, rails: int) -> Optional[list[tuple[int, int]]]:
+    """The ``rails`` candidates with distinct local and remote devices that use the most verified links,
+    ties broken by the smallest sorted keys; ``None`` when no such set exists.
+
+    ``candidates`` is sorted by key, so each combination, and therefore the rail order, is ordered by key.
+    A rank has at most four devices, so the search is at most C(16, 2) combinations.
+    """
+    best = None
+    for combo in itertools.combinations(candidates, rails):
+        if len({l for _, l, _ in combo}) < rails or len({r for _, _, r in combo}) < rails:
+            continue
+        score = (sum(key[0] for key, _, _ in combo), [key for key, _, _ in combo])
+        if best is None or score < best[0]:
+            best = (score, combo)
+    return None if best is None else [(l, r) for _, l, r in best[1]]
+
+
 def plan_routes(
     endpoints: Sequence[Sequence[Endpoint]], rank: int, rails: int
 ) -> list[list[tuple[int, int]]]:
@@ -108,35 +127,28 @@ def plan_routes(
             routes.append([])
             continue
         remote = endpoints[peer]
-        # Verified same-subnet links first, ordered by network so both ends agree; then same-index
-        # pairs with no IPv4 GID on either end, which cannot be checked and are trusted in caller
-        # order, as index pairing would. Both keys are symmetric between the two ranks.
+        # Candidates: verified same-subnet links, keyed by network and the link's two addresses; and
+        # same-index pairs with no IPv4 GID on either end, which cannot be checked and are trusted in
+        # caller order, as index pairing would. Every key is symmetric between the two ranks.
         verified = [
-            ((0, int(local[l].ipv4.network.network_address), min(int(local[l].ipv4.ip), int(remote[r].ipv4.ip))), l, r)
+            ((0, int(local[l].ipv4.network.network_address),
+              min(int(local[l].ipv4.ip), int(remote[r].ipv4.ip)),
+              max(int(local[l].ipv4.ip), int(remote[r].ipv4.ip))), l, r)
             for l in range(len(local))
             for r in range(len(remote))
             if _same_link(local[l], remote[r])
         ]
         unverifiable = [
-            ((1, h, 0), h, h)
+            ((1, h, 0, 0), h, h)
             for h in range(min(len(local), len(remote)))
             if local[h].ipv4 is None or remote[h].ipv4 is None
         ]
-        links = sorted(verified + unverifiable)
-        chosen: list[tuple[int, int]] = []
-        used_local: set[int] = set()
-        used_remote: set[int] = set()
-        for _, l, r in links:
-            if l in used_local or r in used_remote:
-                continue
-            chosen.append((l, r))
-            used_local.add(l)
-            used_remote.add(r)
-            if len(chosen) == rails:
-                break
-        if len(chosen) < rails:
+        candidates = sorted(verified + unverifiable)
+        chosen = _best_matching(candidates, rails)
+        if chosen is None:
+            reach = next((k for k in range(rails - 1, 0, -1) if _best_matching(candidates, k)), 0)
             raise RuntimeError(
-                f"rank {rank}: {len(chosen)} of {rails} RoCE rails have a link to rank {peer}; "
+                f"rank {rank}: {reach} of {rails} RoCE rails have a link to rank {peer}; "
                 f"local {[(e.name, str(e.ipv4)) for e in local]}, "
                 f"remote {[(e.name, str(e.ipv4)) for e in remote]}"
             )
