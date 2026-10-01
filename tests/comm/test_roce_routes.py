@@ -1,0 +1,112 @@
+"""Per-peer RoCE route planning: switched fabrics keep index pairing, switchless rings pair by subnet."""
+
+import ipaddress
+
+import pytest
+
+from b12x.comm.roce._routes import Endpoint, plan_routes
+
+
+def ep(name, iface=None):
+    return Endpoint(name, None if iface is None else ipaddress.IPv4Interface(iface))
+
+
+# Three DGX Sparks cabled port 0 -> next node's port 1 (no switch). Every cable shows up as two
+# PCIe functions, each with its own /30, so each peer is reachable over exactly two local devices.
+RING = [
+    [ep("rocep1s0f0", "10.10.0.1/30"), ep("rocep1s0f1", "10.10.4.2/30"),
+     ep("roceP2p1s0f0", "10.10.1.1/30"), ep("roceP2p1s0f1", "10.10.5.2/30")],
+    [ep("rocep1s0f0", "10.10.2.1/30"), ep("rocep1s0f1", "10.10.0.2/30"),
+     ep("roceP2p1s0f0", "10.10.3.1/30"), ep("roceP2p1s0f1", "10.10.1.2/30")],
+    [ep("rocep1s0f0", "10.10.4.1/30"), ep("rocep1s0f1", "10.10.2.2/30"),
+     ep("roceP2p1s0f0", "10.10.5.1/30"), ep("roceP2p1s0f1", "10.10.3.2/30")],
+]
+
+
+def _link(endpoints, rank, peer, local, remote):
+    a = endpoints[rank][local].ipv4
+    b = endpoints[peer][remote].ipv4
+    return a.network == b.network
+
+
+def test_ring_routes_every_rail_over_a_real_link():
+    rails = 2
+    for rank in range(3):
+        routes = plan_routes(RING, rank, rails)
+        assert routes[rank] == []
+        for peer in range(3):
+            if peer == rank:
+                continue
+            assert len(routes[peer]) == rails
+            assert len({l for l, _ in routes[peer]}) == rails
+            for local, remote in routes[peer]:
+                assert _link(RING, rank, peer, local, remote)
+
+
+def test_ring_routes_are_symmetric_so_both_ends_use_the_same_link_per_rail():
+    plans = [plan_routes(RING, rank, 2) for rank in range(3)]
+    for a in range(3):
+        for b in range(3):
+            if a != b:
+                assert plans[a][b] == [(r, l) for l, r in plans[b][a]]
+
+
+def test_ring_rank0_uses_port0_functions_to_the_next_node_and_port1_functions_to_the_previous():
+    routes = plan_routes(RING, 0, 2)
+    names = RING[0]
+    assert {names[l].name for l, _ in routes[1]} == {"rocep1s0f0", "roceP2p1s0f0"}
+    assert {names[l].name for l, _ in routes[2]} == {"rocep1s0f1", "roceP2p1s0f1"}
+
+
+def test_switched_fabric_keeps_index_pairing():
+    switched = [
+        [ep("rocep1s0f0", "192.168.42.10/24"), ep("roceP2p1s0f0", "192.168.43.10/24")],
+        [ep("rocep1s0f0", "192.168.42.11/24"), ep("roceP2p1s0f0", "192.168.43.11/24")],
+        [ep("rocep1s0f0", "192.168.42.12/24"), ep("roceP2p1s0f0", "192.168.43.12/24")],
+    ]
+    for rank in range(3):
+        routes = plan_routes(switched, rank, 2)
+        for peer in range(3):
+            if peer != rank:
+                assert routes[peer] == [(0, 0), (1, 1)]
+
+
+def test_one_flat_subnet_with_extra_devices_keeps_index_pairing_on_the_first_rails():
+    flat = [[ep(f"d{h}", f"10.0.0.{10 * r + h}/24") for h in range(4)] for r in range(2)]
+    assert plan_routes(flat, 0, 2)[1] == [(0, 0), (1, 1)]
+
+
+def test_unknown_addresses_fall_back_to_index_pairing():
+    unknown = [[ep("mlx5_0"), ep("mlx5_1")], [ep("mlx5_0"), ep("mlx5_1")]]
+    assert plan_routes(unknown, 1, 2)[0] == [(0, 0), (1, 1)]
+
+
+def test_two_node_direct_cable_pairs_the_matching_functions():
+    direct = [
+        [ep("rocep1s0f0", "10.20.0.1/30"), ep("roceP2p1s0f0", "10.20.1.1/30")],
+        [ep("roceP2p1s0f0", "10.20.1.2/30"), ep("rocep1s0f0", "10.20.0.2/30")],
+    ]
+    assert plan_routes(direct, 0, 2)[1] == [(0, 1), (1, 0)]
+    assert plan_routes(direct, 1, 2)[0] == [(1, 0), (0, 1)]
+
+
+def test_single_rail_uses_one_link_per_peer():
+    routes = plan_routes(RING, 1, 1)
+    for peer in (0, 2):
+        (local, remote), = routes[peer]
+        assert _link(RING, 1, peer, local, remote)
+
+
+def test_peer_with_too_few_links_is_a_clear_error():
+    broken = [list(r) for r in RING]
+    # Rank 2 loses roceP2p1s0f1 (10.10.3.2), one of its two links to rank 1.
+    broken[2] = [e for e in RING[2] if e.name != "roceP2p1s0f1"]
+    with pytest.raises(RuntimeError, match="rank 1: 1 of 2 .* rank 2"):
+        plan_routes(broken, 1, 2)
+
+
+def test_rails_out_of_range_rejected():
+    with pytest.raises(ValueError):
+        plan_routes(RING, 0, 0)
+    with pytest.raises(ValueError):
+        plan_routes(RING, 0, 3)

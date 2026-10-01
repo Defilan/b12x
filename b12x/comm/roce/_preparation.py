@@ -155,7 +155,7 @@ def query_from_runtime(
                 "threads": runtime._threads,
                 "slots": runtime._layout.slots,
                 "flag_stride": runtime._layout.flag_stride,
-                "hca_count": len(runtime.hca_names),
+                "hca_count": runtime.rail_count,
             }
         ),
     )
