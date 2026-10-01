@@ -8,10 +8,11 @@ device and a remote device on the same subnet.
 
 ``plan_routes`` uses index pairing (rail ``h`` on device ``h`` at both ends) whenever every pair of
 ranks shares a subnet on each such pair, which every switched fabric does, and otherwise pairs devices
-per peer by subnet. A device without an IPv4 GID cannot be checked, so index pairing trusts the
-caller's device order for it. Every rank runs the planner over the same exchanged endpoint list, and
-rails are ordered by link network address, so both ends of a link always agree on which rail it
-carries.
+per peer by subnet. A device without an IPv4 GID cannot be checked, so both modes trust the caller's
+device order for it: index pairing skips the check, and per-peer pairing accepts a same-index pair
+with such a device only after every verified same-subnet link. Every rank runs the planner over the
+same exchanged endpoint list, and rails are ordered by link network address, so both ends of a link
+always agree on which rail it carries.
 """
 
 from __future__ import annotations
@@ -107,16 +108,21 @@ def plan_routes(
             routes.append([])
             continue
         remote = endpoints[peer]
-        links = sorted(
-            (
-                (int(local[l].ipv4.network.network_address), min(int(local[l].ipv4.ip), int(remote[r].ipv4.ip))),
-                l,
-                r,
-            )
+        # Verified same-subnet links first, ordered by network so both ends agree; then same-index
+        # pairs with no IPv4 GID on either end, which cannot be checked and are trusted in caller
+        # order, as index pairing would. Both keys are symmetric between the two ranks.
+        verified = [
+            ((0, int(local[l].ipv4.network.network_address), min(int(local[l].ipv4.ip), int(remote[r].ipv4.ip))), l, r)
             for l in range(len(local))
             for r in range(len(remote))
             if _same_link(local[l], remote[r])
-        )
+        ]
+        unverifiable = [
+            ((1, h, 0), h, h)
+            for h in range(min(len(local), len(remote)))
+            if local[h].ipv4 is None or remote[h].ipv4 is None
+        ]
+        links = sorted(verified + unverifiable)
         chosen: list[tuple[int, int]] = []
         used_local: set[int] = set()
         used_remote: set[int] = set()

@@ -116,6 +116,29 @@ def test_peer_with_too_few_links_is_a_clear_error():
         plan_routes(broken, 1, 2)
 
 
+def test_fallback_keeps_an_unverifiable_same_index_pair_after_verified_links():
+    """Subnet fallback still trusts a same-index pair it cannot check, but only after verified links."""
+    mixed = [
+        [ep("ib0"), ep("roce1", "10.0.0.1/30"), ep("roce2", "10.0.9.1/30")],
+        [ep("ib0"), ep("roce1", "10.0.5.2/30"), ep("roce2", "10.0.0.2/30")],
+    ]
+    # Device 1 pairs with device 1 on different subnets, so index pairing is invalid; the only
+    # verified link is rank 0 device 1 to rank 1 device 2, and device 0 on both ends has no IPv4 GID.
+    assert plan_routes(mixed, 0, 2)[1] == [(1, 2), (0, 0)]
+    assert plan_routes(mixed, 1, 2)[0] == [(2, 1), (0, 0)]
+
+
+def test_fallback_prefers_verified_links_over_unverifiable_pairs():
+    """With enough verified links, an unverifiable same-index pair is not used."""
+    ring = [list(r) for r in RING]
+    ring[0] = [ep("mlx5_0")] + ring[0]
+    ring[1] = [ep("mlx5_0")] + ring[1]
+    ring[2] = [ep("mlx5_0")] + ring[2]
+    for rank in range(3):
+        for peer, links in enumerate(plan_routes(ring, rank, 2)):
+            assert (0, 0) not in links
+
+
 def test_rails_out_of_range_rejected():
     """Rail counts outside 1..MAX_RAILS are rejected."""
     with pytest.raises(ValueError):
