@@ -6,10 +6,12 @@ with the peer's device ``h``. A switchless topology breaks that: three DGX Spark
 PCIe functions with their own point-to-point subnet. There, rail ``h`` to a peer must use a local
 device and a remote device on the same subnet.
 
-``plan_routes`` keeps index pairing whenever it is valid for every pair of ranks (so switched
-fabrics behave exactly as before) and otherwise pairs devices per peer by subnet. Every rank runs
-it over the same exchanged endpoint list, and rails are ordered by link network address, so both
-ends of a link always agree on which rail it carries.
+``plan_routes`` uses index pairing (rail ``h`` on device ``h`` at both ends) whenever every pair of
+ranks shares a subnet on each such pair, which every switched fabric does, and otherwise pairs devices
+per peer by subnet. A device without an IPv4 GID cannot be checked, so index pairing trusts the
+caller's device order for it. Every rank runs the planner over the same exchanged endpoint list, and
+rails are ordered by link network address, so both ends of a link always agree on which rail it
+carries.
 """
 
 from __future__ import annotations
@@ -70,6 +72,7 @@ def local_endpoints(
 
 
 def _same_link(a: Endpoint, b: Endpoint) -> bool:
+    """True when both endpoints have IPv4 addresses on the same network."""
     return a.ipv4 is not None and b.ipv4 is not None and a.ipv4.network == b.ipv4.network
 
 
@@ -82,7 +85,7 @@ def _index_pairing_valid(endpoints: Sequence[Sequence[Endpoint]], rails: int) ->
             for h in range(rails):
                 x, y = endpoints[a][h], endpoints[b][h]
                 if x.ipv4 is None or y.ipv4 is None:
-                    continue  # nothing to check against: trust the caller's ordering, as before
+                    continue  # no IPv4 GID to compare: trust the caller's device order
                 if x.ipv4.network != y.ipv4.network:
                     return False
     return True

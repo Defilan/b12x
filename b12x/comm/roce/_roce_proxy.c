@@ -294,8 +294,8 @@ int roce_local_blob(roce_ctx_t *c, void *out, uint64_t out_len) {
     return 0;
 }
 
+// Move local HCA h's queue pair for rank p to RTS, connected to the peer's HCA r.
 static int connect_qp(roce_ctx_t *c, int h, int r, int p, const roce_blob_t *peer) {
-    // Local HCA h to the peer's HCA r.
     roce_hca_t *hca = &c->hca[h];
     struct ibv_qp_attr rtr;
     memset(&rtr, 0, sizeof(rtr));
@@ -415,6 +415,8 @@ static int drain_cq(roce_ctx_t *c, int h) {
     return 0;
 }
 
+// Post op seq to every peer: one payload stripe plus its flag write per rail, each on
+// the HCA routed to that peer for the rail.
 static int post_op(roce_ctx_t *c, uint32_t seq, uint32_t nbytes) {
     if (nbytes == 0 || nbytes % 16 != 0) {
         snprintf(c->err, sizeof(c->err),

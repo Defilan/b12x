@@ -281,7 +281,7 @@ class RoceOneshotAllReduce:
         self._ctrl_base = host_ptr + self._layout.ctrl_off
         # ctrl record (kernel-written): seq, nbytes, error seq, missing peer,
         # nbytes per slot (the proxy uses these when it has to catch up), and
-        # the missing HCA index for timeout diagnostics.
+        # the missing rail index for timeout diagnostics (reported as error_hca).
         self._ctrl_words = self._region[
             self._layout.ctrl_off : self._layout.ctrl_off + 28
         ].view(torch.int32)

@@ -8,6 +8,7 @@ from b12x.comm.roce._routes import Endpoint, plan_routes
 
 
 def ep(name, iface=None):
+    """Endpoint named ``name`` with an optional IPv4 interface such as ``10.0.0.1/30``."""
     return Endpoint(name, None if iface is None else ipaddress.IPv4Interface(iface))
 
 
@@ -24,12 +25,14 @@ RING = [
 
 
 def _link(endpoints, rank, peer, local, remote):
+    """True when the two chosen devices share an IPv4 network."""
     a = endpoints[rank][local].ipv4
     b = endpoints[peer][remote].ipv4
     return a.network == b.network
 
 
 def test_ring_routes_every_rail_over_a_real_link():
+    """Every rail to every peer uses two devices on the same /30, and a peer's rails use distinct devices."""
     rails = 2
     for rank in range(3):
         routes = plan_routes(RING, rank, rails)
@@ -44,6 +47,7 @@ def test_ring_routes_every_rail_over_a_real_link():
 
 
 def test_ring_routes_are_symmetric_so_both_ends_use_the_same_link_per_rail():
+    """Rank a's route to b is rank b's route to a with the ends swapped, rail for rail."""
     plans = [plan_routes(RING, rank, 2) for rank in range(3)]
     for a in range(3):
         for b in range(3):
@@ -52,6 +56,7 @@ def test_ring_routes_are_symmetric_so_both_ends_use_the_same_link_per_rail():
 
 
 def test_ring_rank0_uses_port0_functions_to_the_next_node_and_port1_functions_to_the_previous():
+    """On the ring, port 0's two functions reach the next node and port 1's reach the previous one."""
     routes = plan_routes(RING, 0, 2)
     names = RING[0]
     assert {names[l].name for l, _ in routes[1]} == {"rocep1s0f0", "roceP2p1s0f0"}
@@ -59,6 +64,7 @@ def test_ring_rank0_uses_port0_functions_to_the_next_node_and_port1_functions_to
 
 
 def test_switched_fabric_keeps_index_pairing():
+    """Two subnets shared by every rank: rail h uses device h at both ends."""
     switched = [
         [ep("rocep1s0f0", "192.168.42.10/24"), ep("roceP2p1s0f0", "192.168.43.10/24")],
         [ep("rocep1s0f0", "192.168.42.11/24"), ep("roceP2p1s0f0", "192.168.43.11/24")],
@@ -72,16 +78,19 @@ def test_switched_fabric_keeps_index_pairing():
 
 
 def test_one_flat_subnet_with_extra_devices_keeps_index_pairing_on_the_first_rails():
+    """Four devices on one subnet: the rails use devices 0 and 1 at both ends."""
     flat = [[ep(f"d{h}", f"10.0.0.{10 * r + h}/24") for h in range(4)] for r in range(2)]
     assert plan_routes(flat, 0, 2)[1] == [(0, 0), (1, 1)]
 
 
 def test_unknown_addresses_fall_back_to_index_pairing():
+    """Devices without IPv4 GIDs are paired in the order given."""
     unknown = [[ep("mlx5_0"), ep("mlx5_1")], [ep("mlx5_0"), ep("mlx5_1")]]
     assert plan_routes(unknown, 1, 2)[0] == [(0, 0), (1, 1)]
 
 
 def test_two_node_direct_cable_pairs_the_matching_functions():
+    """A two-node direct cable pairs each function with the one on its subnet, whatever the device order."""
     direct = [
         [ep("rocep1s0f0", "10.20.0.1/30"), ep("roceP2p1s0f0", "10.20.1.1/30")],
         [ep("roceP2p1s0f0", "10.20.1.2/30"), ep("rocep1s0f0", "10.20.0.2/30")],
@@ -91,6 +100,7 @@ def test_two_node_direct_cable_pairs_the_matching_functions():
 
 
 def test_single_rail_uses_one_link_per_peer():
+    """With one rail, each peer gets one route over a real link."""
     routes = plan_routes(RING, 1, 1)
     for peer in (0, 2):
         (local, remote), = routes[peer]
@@ -98,6 +108,7 @@ def test_single_rail_uses_one_link_per_peer():
 
 
 def test_peer_with_too_few_links_is_a_clear_error():
+    """A peer reachable over fewer links than rails fails with the ranks and counts named."""
     broken = [list(r) for r in RING]
     # Rank 2 loses roceP2p1s0f1 (10.10.3.2), one of its two links to rank 1.
     broken[2] = [e for e in RING[2] if e.name != "roceP2p1s0f1"]
@@ -106,6 +117,7 @@ def test_peer_with_too_few_links_is_a_clear_error():
 
 
 def test_rails_out_of_range_rejected():
+    """Rail counts outside 1..MAX_RAILS are rejected."""
     with pytest.raises(ValueError):
         plan_routes(RING, 0, 0)
     with pytest.raises(ValueError):
