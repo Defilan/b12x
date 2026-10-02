@@ -51,7 +51,15 @@ def test_independent_matrices_keep_tp_codewords_and_scale_vectors(
                 "packed_file": filename,
             }
     save_file(tensors, tmp_path / filename)
-    monkeypatch.setattr(independent, "_manifest", lambda root: {"by_name": entries})
+    monkeypatch.setattr(
+        independent,
+        "_manifest",
+        lambda root: {
+            "by_name": entries,
+            "codebook": "lut_e4m3",
+            "bits_per_quantized_coefficient": 2,
+        },
+    )
     source, weights = independent.read_independent_layer(
         tmp_path,
         0,
